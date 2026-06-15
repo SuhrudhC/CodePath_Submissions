@@ -43,19 +43,19 @@ Upon initial load, the map incorrectly centers itself in the middle of the India
 
 ### Environment Setup
 
-[Notes on setting up your local development environment - challenges you faced, how you solved them]
+Standard README flow (.env copy, uv sync, npm install), but three snags. No Google Cloud access (granted via the project Discord), so I used CI's forked-repo trick — fake GOOGLE_* env vars and pytest -m "not require_repo_secrets". Every test also failed with a misleading AttributeError: module 'evaluate' has no attribute 'run_langsmith_evaluation'; real cause was ALL_PROXY=socks5h://... set without socksio installed, breaking httpx during a conftest import — fixed by unsetting the proxy vars. Lastly, git push fails (no GitHub creds in this shell); branch is committed locally and needs a push from an authenticated terminal.
 
 ### Steps to Reproduce
 
-1. [Step 1]
-2. [Step 2]
-3. [Observed result]
+1. Load the app with the LLM and email sender mocked.
+2. Burst POST /api/query (20x) and POST /api/feedback (5x), resetting the limiter between.
+3. Observed: all 20 /api/query return 200, zero 429s; /api/feedback returns 200 x3 then 429. Limiter works on feedback, not on the costly query endpoint.
 
 ### Reproduction Evidence
 
-- **Commit showing reproduction:** [Link to commit in your fork]
-- **Screenshots/logs:** [If applicable]
-- **My findings:** [What you discovered during reproduction]
+- **Commit showing reproduction:** [[Link to commit in your fork]](https://github.com/SuhrudhC/tenantfirstaid_codepath/commit/ae78a5c661f1b5bc)
+- **Screenshots/logs:** /api/query x20 -> {200: 20} (0 of 429); /api/feedback x5 -> {200: 3, 429: 2}. Bug reproduced 2/2 trials.
+- **My findings:** The Limiter has no default limits, so only routes that opt in are throttled — and only /api/feedback does. /api/query, the one endpoint that costs money per call (Vertex AI RAG + Gemini), was never given a limit.
 
 ---
 
@@ -63,30 +63,32 @@ Upon initial load, the map incorrectly centers itself in the middle of the India
 
 ### Analysis
 
-[Your analysis of the root cause - what's causing the issue?]
+Root cause is in backend/tenantfirstaid/app.py: the Limiter has no default_limits (lines 20–24), /api/feedback opts in (lines 58–68), but /api/query is registered plain (line 55) with no limit. Not a break — the limit was just never wired to the expensive endpoint.
 
 ### Proposed Solution
 
-[High-level description of your fix approach]
+Wrap the class-based view the same way feedback is wrapped: limiter.limit("10 per minute")(ChatView.as_view("chat")). Confirm the exact number with mentors (possibly env-configurable), and verify production keys off the real client IP (X-Forwarded-For/ProxyFix) behind the DO proxy so traffic doesn't share one bucket.
 
 ### Implementation Plan
 
 Using UMPIRE framework (adapted):
 
-**Understand:** [Restate the problem]
+**Understand:** /api/query hits Vertex AI RAG + Gemini per call and has no limit, risking cost/availability abuse. It should 429 over a per-IP budget like /api/feedback. Login is out of scope (anonymous tenant tool).
 
-**Match:** [What similar patterns/solutions exist in the codebase?]
+**Match:** Near-copy of the feedback limit (app.py:58–68) and its test test_rate_limiting_returns_429 (test_app.py:91–101).
 
 **Plan:** [Step-by-step implementation plan]
-1. [Modify file X to do Y]
-2. [Add function Z]
-3. [Update tests]
+1. Pick the limit
+2. wrap ChatView.as_view("chat")
+3. Add 429 + within-limit tests
+4. Run make check and re-run the repro
+5. Optional Turnstile/hCaptcha only if needed.
 
-**Implement:** [Link to your branch/commits as you work]
+**Implement:** Phase III on branch feature-rate-limit-api-query. PR link: TBD
 
-**Review:** [Self-review checklist - does it follow the project's contribution guidelines?]
+**Review:** No CONTRIBUTING.md; follow the PR template (type = Bug Fix, Closes #<n>, tests = Yes) and pr-check.yml checks (ruff, ty, pytest). Branch follows the feature-* convention.
 
-**Evaluate:** [How will you verify it works?]
+**Evaluate:** Done when the new 429 and within-limit tests pass, make check is green, and the repro flips from zero 429s to throttled.
 
 ---
 
