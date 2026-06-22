@@ -3,9 +3,12 @@
 # Contribution [#]: 1, Week 1, Issue: "initial view state is confusing and set to different values in multiple files"
 
 **Contribution Number:** [1]  
+
 **Student:** Suhrudh Chivukula
-**Issue:** [[GitHub issue link]  ](https://github.com/openSenseMap/frontend/issues/706)
-**Status:** [Phase I] [Complete]
+
+**Issue:** [[GitHub issue link]] (https://github.com/openSenseMap/frontend/issues/706)
+
+**Status:** [Phase 3] [Complete]
 
 ---
 
