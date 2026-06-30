@@ -156,15 +156,22 @@ backend/tests/test_query_rate_limit.py — New file with 13 tests across 6 categ
 
 ## Pull Request
 
-**PR Link:** [GitHub PR URL when submitted]
+**PR Link:** github.com/codeforpdx/tenantfirstaid/pull/376
 
-**PR Description:** [Draft or final PR description - much of the content above can be adapted]
+**PR Description:** /api/query is the most expensive thing this app does — every request fans out to Vertex AI RAG plus a Gemini completion. Right now it has no rate limit at all, even though flask_limiter is already set up and used on /api/feedback. Anyone (or any script) can hit it as fast as they want, which is a real cost and availability risk.
+
+This PR wires the existing limiter up to /api/query the same way it's already used on /api/feedback. It defaults to 10 requests per minute per IP, which should be plenty for a normal back-and-forth conversation but stops a script from hammering the endpoint. The limit is also configurable through a QUERY_RATE_LIMIT env var, so it can be tuned in production without a code change if it turns out to be too tight or too loose.
+
+I also wrote a small script (backend/repro_rate_limit.py) that reproduces the bug by bursting both endpoints and comparing results — before the fix /api/query returned 200 for all 20 requests with zero rejections, and after the fix it correctly starts returning 429s past the 10th request.
+
+Closes #168. Tests: 2 new tests in test_app.py, plus 13 new tests in test_query_rate_limit.py covering the boundary, per-IP isolation, window reset, env-var wiring, and regression against the feedback endpoint's existing limit.
 
 **Maintainer Feedback:**
+- No feedback yet — PR was just opened. CI checks are running against it. Will fill out the form below when feedback is received.
 - [Date]: [Summary of feedback received]
 - [Date]: [How you addressed it]
 
-**Status:** [Awaiting review / Iterating / Approved / Merged]
+**Status:** Awaiting review
 
 ---
 
@@ -172,20 +179,21 @@ backend/tests/test_query_rate_limit.py — New file with 13 tests across 6 categ
 
 ### Technical Skills Gained
 
-[What you learned technically]
+I got hands-on with flask_limiter for the first time. Specifically, the gotcha is that wrapping a class-based view (ChatView.as_view(...)) with limiter.limit() must occur before the view is registered with add_url_rule, since the decorator returns a new wrapped function rather than mutating the view in place. I also learned that flask_limiter keys its counters by whatever the key_func returns (here, get_remote_address), which is what makes per-IP isolation work, and that testing that isolation requires faking REMOTE_ADDR through Flask's test client (environ_base={"REMOTE_ADDR": "..."}) rather than just hitting the endpoint normally. On the testing side, I learned that streaming Flask responses (stream_with_context) need their body fully drained with resp.get_data() in a test before the next request, or Flask throws a confusing "Popped wrong request context" error, which cost me real debugging time before I traced it to the actual cause.
 
 ### Challenges Overcome
 
-[What was hard and how you solved it]
+The single biggest time-sink wasn't the fix itself; it was getting the test environment running at all. Every test failed with AttributeError: module 'evaluate' has no attribute 'run_langsmith_evaluation', which sounded like a totally unrelated import problem. After digging through the traceback, I found the real cause buried underneath: my sandbox had ALL_PROXY set to a SOCKS proxy, but the socksio package wasn't installed, so building an httpx client during an autouse pytest fixture failed silently and surfaced as that misleading attribute error several layers up. Unsetting the proxy env vars fixed it. The second real challenge was the streaming-response test context bug mentioned above, easy to miss because it only shows up when you loop multiple requests against a streaming endpoint without draining each response first.
 
 ### What I'd Do Differently Next Time
 
-[Reflection on your process]
+I'd check for proxy/network env vars in my environment before touching the test suite, since that one red herring ate more time than the actual root-cause investigation of the bug itself. I'd also reproduce the bug with a dedicated script even earlier in the process than I did. Having that script ready meant the "did the fix actually work" question at the end was a 30-second rerun instead of a fresh investigation, and I'd want that safety net in place from minute one next time, not partway through. Lastly, I'd ask upfront whether GitHub push access would be available in my working environment, since that turned into a multi-step detour (trying gh, checking keychain, eventually using a scoped PAT) that could have been resolved earlier if I'd surfaced the question before starting Phase III instead of after.
 
 ---
 
 ## Resources Used
 
-- [Link to helpful documentation]
-- [Tutorial or Stack Overflow post that helped]
-- [GitHub issues or discussions that helped]
+- flask-limiter documentation — reference for the library already in use in this codebase
+- .github/workflows/pr-check.yml in this repo — showed me how CI handles missing GCP credentials for forked PRs, which is what unblocked running the test suite locally without real Google Cloud access
+- Issue #168 and the maintainer's re-scoping comment on it — clarified that the issue's original framing (auth/session endpoints) was stale and the real ask was just rate limiting /api/query
+- The existing /api/feedback rate-limit implementation and its test in test_app.py — used directly as the template/pattern for both the fix and the new tests, rather than designing something from scratch
